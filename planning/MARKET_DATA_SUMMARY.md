@@ -44,7 +44,7 @@ MarketDataSource (ABC)
 
 ## Test Suite
 
-**83 tests, all passing.** 7 test modules in `backend/tests/market/`.
+**84 tests, all passing.** 7 test modules in `backend/tests/market/`.
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
@@ -54,7 +54,7 @@ MarketDataSource (ABC)
 | test_simulator_source.py | 10 | (integration tests) |
 | test_factory.py | 7 | factory.py: 100% |
 | test_massive.py | 13 | massive_client.py: 94% |
-| test_stream.py | 10 | stream.py: 97% |
+| test_stream.py | 11 | stream.py: 97% |
 
 Overall coverage: 98%.
 
@@ -69,6 +69,10 @@ A comprehensive code review identified 7 issues. All were resolved:
 5. **Correlation constants cleaned up** — removed unused `DEFAULT_CORR`, consolidated into `CROSS_GROUP_CORR`
 6. **Unused test imports removed** — `pytest`, `math`, `asyncio` cleaned from 4 test files
 7. **Massive test mocks fixed** — `source._client` set in tests, patches target correct names
+
+A follow-up review (see `planning/MARKET_DATA_REVIEW.md`) found one more issue, since fixed:
+
+8. **`stream.py` module-level `router` deduplicated** — `create_stream_router()` was closing over a shared module-level `APIRouter`, so repeated calls (e.g. once per test-created FastAPI app) silently duplicated the `/prices` route on the same object. Now builds a fresh `APIRouter()` per call; regression test added.
 
 ## Demo
 

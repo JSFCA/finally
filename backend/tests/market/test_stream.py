@@ -44,6 +44,22 @@ class TestCreateStreamRouter:
         paths = {route.path for route in router.routes}
         assert "/api/stream/prices" in paths
 
+    def test_repeated_calls_do_not_share_router(self):
+        """Each call must return an independent router with exactly one route.
+
+        Regression test: create_stream_router() used to close over a
+        module-level router, so calling it more than once (e.g. once per
+        test-created FastAPI app) silently duplicated the /prices route
+        registration on a shared object.
+        """
+        cache = PriceCache()
+        router_a = create_stream_router(cache)
+        router_b = create_stream_router(cache)
+
+        assert router_a is not router_b
+        assert len(router_a.routes) == 1
+        assert len(router_b.routes) == 1
+
 
 class TestGenerateEvents:
     """Tests for the underlying SSE event generator."""

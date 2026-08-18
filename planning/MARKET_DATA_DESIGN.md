@@ -892,14 +892,15 @@ from .cache import PriceCache
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/stream", tags=["streaming"])
-
 
 def create_stream_router(price_cache: PriceCache) -> APIRouter:
     """Create the SSE streaming router with a reference to the price cache.
 
     This factory pattern lets us inject the PriceCache without globals.
+    Returns a fresh APIRouter each call so repeated calls (e.g. one per
+    test-created FastAPI app) never share route state.
     """
+    router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
     @router.get("/prices")
     async def stream_prices(request: Request) -> StreamingResponse:
@@ -1125,7 +1126,7 @@ async def remove_from_watchlist(
 
 ## 12. Testing Strategy
 
-**73 tests, all passing, 84% overall coverage** (`backend/tests/market/`, 6 modules). Every test below is real, current test code — not illustrative pseudocode.
+**84 tests, all passing, 98% overall coverage** (`backend/tests/market/`, 7 modules). Every test below is real, current test code — not illustrative pseudocode.
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
@@ -1134,7 +1135,8 @@ async def remove_from_watchlist(
 | `test_simulator.py` | 17 | `simulator.py`: 98% |
 | `test_simulator_source.py` | 10 | integration tests for `SimulatorDataSource` |
 | `test_factory.py` | 7 | `factory.py`: 100% |
-| `test_massive.py` | 13 | `massive_client.py`: 56% (expected — real API calls are mocked) |
+| `test_massive.py` | 13 | `massive_client.py`: 94% |
+| `test_stream.py` | 11 | `stream.py`: 97% |
 
 Run with:
 
@@ -1318,11 +1320,55 @@ class TestMassiveDataSource:
 
 Because `massive.RESTClient` is a normal top-level import (see [Section 7](#7-massive-api-client)), `patch("app.market.massive_client.RESTClient")` works directly — no `create=True` workaround needed.
 
-### 12.5 Not yet covered
+### 12.5 `stream.py` — `test_stream.py`
 
-- **SSE streaming (`stream.py`, 31% coverage)** — exercising the generator end-to-end needs an ASGI test client (e.g. `httpx.AsyncClient(app=...)`), which isn't practical until `app/main.py` exists. Once it does, add an integration test that connects, reads a few `data:` lines, and asserts on parsed JSON shape.
+SSE streaming is now covered without needing a running ASGI server: `TestCreateStreamRouter` exercises the router factory directly (including a regression test that repeated calls return independent routers rather than sharing route state — see `planning/MARKET_DATA_REVIEW.md` §3.1), and `TestGenerateEvents` drives the `_generate_events` async generator with a `FakeRequest` stand-in for `fastapi.Request` that controls disconnect timing:
+
+```python
+class FakeRequest:
+    """Minimal stand-in for fastapi.Request, driving disconnect timing."""
+
+    def __init__(self, disconnect_after: int | None = 0, client=None):
+        self.client = client if client is not None else FakeClient()
+        self._disconnect_after = disconnect_after
+        self._checks = 0
+
+    async def is_disconnected(self) -> bool:
+        if self._disconnect_after is None:
+            return False
+        result = self._checks >= self._disconnect_after
+        self._checks += 1
+        return result
+
+
+class TestGenerateEvents:
+    async def test_resends_on_version_change(self):
+        """A cache mutation between loop iterations triggers a second send."""
+        cache = PriceCache()
+        cache.update("AAPL", 190.50)
+
+        class BumpingRequest(FakeRequest):
+            def __init__(self):
+                super().__init__(disconnect_after=None)
+                self.call_count = 0
+
+            async def is_disconnected(self) -> bool:
+                self.call_count += 1
+                if self.call_count == 2:
+                    cache.update("AAPL", 191.00)
+                return self.call_count >= 3
+
+        events = [e async for e in _generate_events(cache, BumpingRequest(), interval=0.01)]
+        data_events = [e for e in events if e.startswith("data: ")]
+        assert len(data_events) == 2
+```
+
+Also covered: retry-directive preamble, immediate disconnect, skip-send on empty cache, no resend on unchanged version, graceful handling of `asyncio.CancelledError` from `is_disconnected()`, and multi-ticker payload serialization.
+
+### 12.6 Not yet covered
+
 - **Concurrent-writer stress test for `PriceCache`** — the locking looks correct by inspection; a multi-threaded writer test would verify it empirically but wasn't judged necessary at this scale (10–50 tickers).
-- **Full 10-ticker default watchlist through `GBMSimulator`** — current tests use 1–2 tickers per case; a test that builds the Cholesky decomposition for the full default set would catch correlation-matrix edge cases (e.g. non-positive-definite matrices) if the correlation structure changes later.
+- **Full 10-ticker default watchlist through `GBMSimulator`** — current tests use 1–2 tickers per case; a test that builds the Cholesky decomposition for the full default set would catch correlation-matrix edge cases (e.g. non-positive-definite matrices) if the correlation structure changes later. Manually verified during the 2026-08-18 review (500 steps across all 10 default tickers, no errors) but not yet captured as an automated test.
 
 ---
 

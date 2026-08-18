@@ -20,7 +20,7 @@ Single Docker container serving everything on port 8000:
 - **Frontend**: Next.js (static export) with TypeScript and Tailwind CSS
 - **Backend**: FastAPI (Python/uv) with SSE streaming
 - **Database**: SQLite with lazy initialization
-- **AI**: LiteLLM → OpenRouter (Cerebras inference) with structured outputs
+- **AI**: LiteLLM → LLM ladder (`groq/openai/gpt-oss-120b`, then `gemini/gemini-3.6-flash`, then `openrouter/openai/gpt-oss-20b:free`)
 - **Market data**: Built-in GBM simulator (default) or Massive API (optional)
 
 ## Quick Start
@@ -41,7 +41,7 @@ docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key for AI chat |
+| `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Yes | API keys for AI Ladder to serve chat |
 | `MASSIVE_API_KEY` | No | Massive (Polygon.io) key for real market data; omit to use simulator |
 | `LLM_MOCK` | No | Set `true` for deterministic mock LLM responses (testing) |
 

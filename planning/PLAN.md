@@ -66,7 +66,7 @@ The user runs a single Docker command (or a provided start script). A browser op
 - **Backend**: FastAPI (Python), managed as a `uv` project
 - **Database**: SQLite, single file at `db/finally.db`, volume-mounted for persistence
 - **Real-time data**: Server-Sent Events (SSE) — simpler than WebSockets, one-way server→client push, works everywhere
-- **AI integration**: LiteLLM → OpenRouter (Cerebras for fast inference), with structured outputs for trade execution
+- **AI integration**: LiteLLM → LLM ladder (`groq/openai/gpt-oss-120b`, then `gemini/gemini-3.6-flash`, then `openrouter/openai/gpt-oss-20b:free`)
 - **Market data**: Environment-variable driven — simulator by default, real data via Massive API if key provided
 
 ### Why These Choices
@@ -121,8 +121,11 @@ finally/
 ## 5. Environment Variables
 
 ```bash
-# Required: OpenRouter API key for LLM chat functionality
+# LLM chat: at least one of the three keys below is required.
+# Each is individually optional - a ladder rung whose key is absent is skipped.
 OPENROUTER_API_KEY=your-openrouter-api-key-here
+GROQ_API_KEY=your-groq-api-key-here
+GEMINI_API_KEY=your-gemini-api-key-here
 
 # Optional: Massive (Polygon.io) API key for real market data
 # If not set, the built-in market simulator is used (recommended for most users)
@@ -281,9 +284,22 @@ All tables include a `user_id` column defaulting to `"default"`. This is hardcod
 
 ## 9. LLM Integration
 
-When writing code to make calls to LLMs, use cerebras-inference skill to use LiteLLM via OpenRouter to the `openrouter/openai/gpt-oss-120b` model with Cerebras as the inference provider. Structured Outputs should be used to interpret the results.
+When writing code to make calls to LLMs use LiteLLM. Structured Outputs should be used to interpret the results.
 
-There is an OPENROUTER_API_KEY in the .env file in the project root.
+`GROQ_API_KEY`, `GEMINI_API_KEY` and `OPENROUTER_API_KEY` live in `.env` at
+the project root. litellm reads all three from the environment; nothing wires
+up a client.
+
+**The turn must walk a ladder of free models**, defined as `DEFAULT_LADDER` in
+`backend/app/chat.py`:
+`groq/openai/gpt-oss-120b`, then `gemini/gemini-3.6-flash`, then
+`openrouter/openai/gpt-oss-20b:free`. A rung whose API key is absent is dropped
+at import, not mid-conversation.
+
+The final rung must support structured outputs — verified 2026-08-18 against
+OpenRouter's model list, where `openai/gpt-oss-20b:free` reports both
+`response_format` and `structured_outputs`. Free model availability rotates;
+re-check before swapping it.
 
 ### How It Works
 
@@ -292,11 +308,11 @@ When the user sends a chat message, the backend:
 1. Loads the user's current portfolio context (cash, positions with P&L, watchlist with live prices, total portfolio value)
 2. Loads recent conversation history from the `chat_messages` table
 3. Constructs a prompt with a system message, portfolio context, conversation history, and the user's new message
-4. Calls the LLM via LiteLLM → OpenRouter, requesting structured output, using the cerebras-inference skill
+4. Calls the LLM via LiteLLM → LLM ladder
 5. Parses the complete structured JSON response
 6. Auto-executes any trades or watchlist changes specified in the response
 7. Stores the message and executed actions in `chat_messages`
-8. Returns the complete JSON response to the frontend (no token-by-token streaming — Cerebras inference is fast enough that a loading indicator is sufficient)
+8. Returns the complete JSON response to the frontend (no token-by-token streaming)
 
 ### Structured Output Schema
 
@@ -339,7 +355,7 @@ The LLM should be prompted as "FinAlly, an AI trading assistant" with instructio
 
 ### LLM Mock Mode
 
-When `LLM_MOCK=true`, the backend returns deterministic mock responses instead of calling OpenRouter. This enables:
+When `LLM_MOCK=true`, the backend returns deterministic mock responses instead of calling LiteLLM. This enables:
 - Fast, free, reproducible E2E tests
 - Development without an API key
 - CI/CD pipelines
